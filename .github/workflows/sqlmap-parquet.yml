@@ -269,16 +269,25 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p previous_release "$PARQUET_DIR"
-          if gh release view latest --json assets -q '.assets[].name' 2>/dev/null | grep -q "all-databases-parquet.zip"; then
-            echo "Downloading previous release Parquet bundle to preserve all tables..."
-            gh release download latest -p "all-databases-parquet.zip" --dir previous_release || true
-            if [ -f previous_release/all-databases-parquet.zip ]; then
-              unzip -qo previous_release/all-databases-parquet.zip -d "$PARQUET_DIR"
-              rm -rf "$PARQUET_DIR/_" "$PARQUET_DIR"/results-* "$PARQUET_DIR"/.* 2>/dev/null || true
-              echo "Successfully restored existing tables from latest release."
-            fi
+          echo "Restoring table-wise Parquet assets from latest release..."
+          if gh release download latest -p "*.parquet" --dir previous_release 2>/dev/null; then
+            for f in previous_release/*.parquet; do
+              [ -e "$f" ] || continue
+              fname=$(basename "$f")
+              # Each asset is named <db>.<table_name>.parquet
+              if [[ "$fname" == *.*.parquet ]]; then
+                db="${fname%%.*}"
+                table="${fname#*.}"
+                if [ "$db" != "_" ] && [ "$db" != "__" ]; then
+                  mkdir -p "$PARQUET_DIR/$db"
+                  cp "$f" "$PARQUET_DIR/$db/$table"
+                  echo "Restored $fname -> $PARQUET_DIR/$db/$table"
+                fi
+              fi
+            done
+            echo "Successfully restored existing tables from latest release."
           else
-            echo "No previous release found; starting clean."
+            echo "No previous release found or no existing parquet assets; starting clean."
           fi
 
       - name: Convert CSV dumps to Parquet
