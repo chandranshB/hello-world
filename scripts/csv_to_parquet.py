@@ -204,7 +204,29 @@ class ColumnProfile:
         return pa.string()
 
 
-def profile_file(path: Path, encoding: str, delimiter: str) -> tuple[list[str], list[ColumnProfile], int]:
+def is_row_included(table: str, header: list[str], row: list[str]) -> bool:
+    """Filter rows by domain rules. For course_coordinator, keep only entries where date has year > 2025."""
+    if "course_coordinator" in table.lower():
+        date_idx = -1
+        for idx, col in enumerate(header):
+            if col.lower() in ("date1", "date"):
+                date_idx = idx
+                break
+        if date_idx != -1 and date_idx < len(row):
+            val = (row[date_idx] or "").strip()
+            m = re.match(r"^(\d{4})", val)
+            if m:
+                try:
+                    return int(m.group(1)) > 2025
+                except ValueError:
+                    return False
+            return False
+    return True
+
+
+def profile_file(
+    path: Path, encoding: str, delimiter: str, table_name: str = ""
+) -> tuple[list[str], list[ColumnProfile], int]:
     profiles: list[ColumnProfile] = []
     header: list[str] = []
     rows = 0
@@ -217,6 +239,8 @@ def profile_file(path: Path, encoding: str, delimiter: str) -> tuple[list[str], 
         profiles = [ColumnProfile() for _ in header]
         for row in reader:
             if not row:
+                continue
+            if not is_row_included(table_name, header, row):
                 continue
             rows += 1
             for index, value in enumerate(row[: len(header)]):
@@ -309,7 +333,7 @@ def convert(task: Task) -> Result:
         result.lossy_encoding = encoding in ("cp1252", "latin-1")
 
         if task.infer_types:
-            header, profiles, _ = profile_file(task.source, encoding, task.delimiter)
+            header, profiles, _ = profile_file(task.source, encoding, task.delimiter, task.table)
             types = [profile.resolve() for profile in profiles]
         else:
             with open_csv_text(task.source, encoding) as handle:
@@ -353,6 +377,9 @@ def convert(task: Task) -> Result:
 
                 for row in reader:
                     if not row:
+                        continue
+
+                    if not is_row_included(task.table, header, row):
                         continue
 
                     if len(row) > len(header):

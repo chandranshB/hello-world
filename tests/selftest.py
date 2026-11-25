@@ -75,6 +75,17 @@ def build_fixtures(root: Path) -> None:
     write_csv(shop / "empty_table.csv", [], ["a", "b", "c"])
     (shop / "zero_bytes.csv").write_bytes(b"")
 
+    write_csv(
+        shop / "course_coordinator.csv",
+        [
+            ["1", "101", "2024-12-10 10:00:00", "F01"],
+            ["2", "102", "2025-05-20 14:30:00", "F02"],
+            ["3", "103", "2026-02-15 09:00:00", "F03"],
+            ["4", "104", "2026-07-22 18:00:00", "F04"],
+        ],
+        ["sem", "ccode", "date1", "fcode"],
+    )
+
     # a table that lives directly under dump/ (no db directory)
     write_csv(root / "app.test" / "dump" / "loose.csv", [["7"]], ["value"])
 
@@ -110,9 +121,12 @@ def test_conversion(tmp: Path) -> None:
     )
 
     manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
-    check("manifest tables", manifest["totals"]["files"] == 6, str(manifest["totals"]))
+    check("manifest tables", manifest["totals"]["files"] == 7, str(manifest["totals"]))
     check("manifest skipped zero-byte", any(e["status"] == "skipped" for e in manifest["files"]))
     check("summary markdown written", summary.exists() and "users" in summary.read_text(encoding="utf-8"))
+
+    coordinator = pq.read_table(out / "shop" / "course_coordinator.parquet")
+    check("course_coordinator filtered to >2025", coordinator.num_rows == 2, str(coordinator.num_rows))
 
     users = pq.read_table(out / "shop" / "users.parquet")
     check("users rows", users.num_rows == 5, str(users.num_rows))
@@ -169,7 +183,7 @@ def test_conversion(tmp: Path) -> None:
         count = connection.execute('SELECT count(*) FROM "shop"."orders"').fetchone()[0]
         check("duckdb view row count", count == 200_000, str(count))
         inventory = connection.execute("SELECT count(*) FROM _inventory").fetchone()[0]
-        check("duckdb inventory", inventory == 6, str(inventory))
+        check("duckdb inventory", inventory == 7, str(inventory))
         connection.close()
 
 
