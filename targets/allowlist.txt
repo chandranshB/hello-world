@@ -18,3 +18,5 @@
 # The local throwaway target from tests/lab_server.py, used to smoke-test the
 # pipeline. Delete this line once the real lab host is listed below it.
 127.0.0.1:8080
+14.139.238.230
+

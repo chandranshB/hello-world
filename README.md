@@ -2,7 +2,57 @@
 
 This repo runs sqlmap from a saved HTTP request, dumps all accessible non-system
 databases, converts every dumped CSV table to Parquet, verifies the Parquet
-files, and uploads the results as GitHub Actions artifacts.
+files, and uploads the results as GitHub Actions artifacts and releases.
+
+## 📊 Parquet Data Catalog & Table Downloads
+
+Each dumped database and table is converted to Parquet and organized for instant use:
+
+- **Full Data Catalog**: See [**`DATA_CATALOG.md`**](DATA_CATALOG.md) for direct download links and column schemas.
+- **Latest Release**: [**GitHub Releases (Latest)**](https://github.com/chandranshB/hello-world/releases/latest)
+
+### Direct Download per DB & Table
+
+You can download individual tables directly using the standard naming format:
+`https://github.com/chandranshB/hello-world/releases/latest/download/<database>.<table_name>.parquet`
+
+| Database | Table | Direct Download |
+| :--- | :--- | :--- |
+| `SQLite_masterdb` | `users` | [Download `SQLite_masterdb.users.parquet`](https://github.com/chandranshB/hello-world/releases/latest/download/SQLite_masterdb.users.parquet) |
+| `SQLite_masterdb` | `orders` | [Download `SQLite_masterdb.orders.parquet`](https://github.com/chandranshB/hello-world/releases/latest/download/SQLite_masterdb.orders.parquet) |
+| `SQLite_masterdb` | `notes` | [Download `SQLite_masterdb.notes.parquet`](https://github.com/chandranshB/hello-world/releases/latest/download/SQLite_masterdb.notes.parquet) |
+| `SQLite_masterdb` | *(All tables)* | [Download `SQLite_masterdb.zip`](https://github.com/chandranshB/hello-world/releases/latest/download/SQLite_masterdb.zip) |
+| *(All DBs)* | *(All tables)* | [Download `all-databases-parquet.zip`](https://github.com/chandranshB/hello-world/releases/latest/download/all-databases-parquet.zip) |
+
+### Super Convenient Python Downloader (`download.py`)
+
+No dependencies needed (standard library Python):
+
+```bash
+# List all databases & tables
+python download.py --list
+
+# Download a specific table from a specific database:
+python download.py --db SQLite_masterdb --table users
+
+# Download all tables in a database:
+python download.py --db SQLite_masterdb
+
+# Download all databases and tables:
+python download.py --all
+```
+
+### Direct Remote Query in DuckDB / Pandas (No download needed!)
+
+```python
+import duckdb
+
+# Query remotely over HTTPS:
+url = "https://github.com/chandranshB/hello-world/releases/latest/download/SQLite_masterdb.users.parquet"
+duckdb.sql(f"SELECT username, email FROM read_parquet('{url}')").show()
+```
+
+---
 
 ## Where to upload `login-request.txt`
 

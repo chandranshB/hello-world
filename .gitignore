@@ -23,3 +23,6 @@ __pycache__/
 .venv/
 
 *.zip
+release_assets/
+downloads/
+

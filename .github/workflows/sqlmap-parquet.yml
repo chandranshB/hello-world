@@ -196,6 +196,11 @@ jobs:
         run: |
           python scripts/verify_parquet.py --manifest parquet/manifest.json --checksum --duckdb
 
+      - name: Package release assets
+        if: always() && hashFiles('parquet/manifest.json') != ''
+        run: |
+          python scripts/package_release_assets.py --parquet-dir "$PARQUET_DIR" --out-dir release_assets
+
       - name: Report size
         if: always() && hashFiles('parquet/**') != ''
         run: |
