@@ -79,11 +79,24 @@ def parse_catalog_from_assets(assets: list[dict], repo: str, tag: str) -> dict[s
                 catalog[db]["tables"][table] = {"size": size, "url": url}
 
         # Match <db>.zip
-        elif name.endswith(".zip") and name != "all-databases-parquet.zip":
-            db = name[:-4]
+        elif name.endswith(".zip") and name not in ("all-databases-parquet.zip", "all-databases-sqlite.zip"):
+            if name.endswith(".sqlite.zip"):
+                db = name[:-11]
+                if db not in catalog:
+                    catalog[db] = {"tables": {}, "zip_url": ""}
+                catalog[db]["sqlite_zip_url"] = url
+            else:
+                db = name[:-4]
+                if db not in catalog:
+                    catalog[db] = {"tables": {}, "zip_url": ""}
+                catalog[db]["zip_url"] = url
+
+        # Match <db>.sqlite
+        elif name.endswith(".sqlite") and name != "all-databases.sqlite":
+            db = name[:-7]
             if db not in catalog:
                 catalog[db] = {"tables": {}, "zip_url": ""}
-            catalog[db]["zip_url"] = url
+            catalog[db]["sqlite_url"] = url
 
     return catalog
 
@@ -132,6 +145,7 @@ def main() -> int:
     parser.add_argument("--db", help="Target database name")
     parser.add_argument("--table", help="Target table name")
     parser.add_argument("--all", action="store_true", help="Download all databases and tables")
+    parser.add_argument("--sqlite", action="store_true", help="Download as SQLite database (.sqlite / .sqlite.zip) instead of Parquet")
     parser.add_argument("--out-dir", type=Path, default=Path("downloads"), help="Destination directory (default: downloads/)")
     parser.add_argument("--url", action="store_true", help="Print direct download URL without downloading")
     parser.add_argument("--sql", help="Run a DuckDB SQL query against the table (requires duckdb)")
@@ -199,6 +213,26 @@ def main() -> int:
         res = con.sql(args.sql)
         res.show()
         return 0
+
+    if args.sqlite:
+        if args.db:
+            sqlite_url = catalog.get(args.db, {}).get("sqlite_url")
+            if not sqlite_url:
+                sqlite_url = f"https://github.com/{args.repo}/releases/download/{args.tag}/{args.db}.sqlite"
+            dest = args.out_dir / f"{args.db}.sqlite"
+            success = download_file(sqlite_url, dest)
+            if success:
+                print(f"\nSQLite database ready at: {dest}")
+                return 0
+            return 1
+        else:
+            all_sqlite_url = f"https://github.com/{args.repo}/releases/download/{args.tag}/all-databases.sqlite"
+            dest = args.out_dir / "all-databases.sqlite"
+            success = download_file(all_sqlite_url, dest)
+            if success:
+                print(f"\nUnified SQLite database ready at: {dest}")
+                return 0
+            return 1
 
     if args.all:
         zip_dest = args.out_dir / "all-databases-parquet.zip"

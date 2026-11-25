@@ -1,7 +1,13 @@
-# Parquet Data Catalog
+# Data Catalog: Parquet & SQLite Dumps
 
-This catalog lists all databases and tables dumped and converted to Parquet.
-You can download any specific table, download an entire database bundle, or directly query any table in Python/DuckDB without downloading manually.
+This catalog lists all databases and tables dumped, converted to Parquet, and compiled into SQLite databases.
+You can download individual Parquet tables, SQLite databases, or complete bundles.
+
+## Complete Bundles (All Databases)
+
+- **Complete SQLite Bundle**: [`all-databases-sqlite.zip`](https://github.com/chandranshB/hello-world/releases/latest/download/all-databases-sqlite.zip) (includes `.sqlite` + `.sql` dump)
+- **Complete Parquet Bundle**: [`all-databases-parquet.zip`](https://github.com/chandranshB/hello-world/releases/latest/download/all-databases-parquet.zip)
+- **Unified SQLite DB (Direct)**: [`all-databases.sqlite`](https://github.com/chandranshB/hello-world/releases/latest/download/all-databases.sqlite)
 
 ## Summary of Databases
 
@@ -10,7 +16,8 @@ You can download any specific table, download an entire database bundle, or dire
 - **Tables**: 3
 - **Total Rows**: 13
 - **Total Parquet Size**: 4.4 KiB
-- **Download All Tables for `SQLite_masterdb`**: [`SQLite_masterdb.zip`](https://github.com/chandranshB/hello-world/releases/latest/download/SQLite_masterdb.zip)
+- **SQLite Database**: [`SQLite_masterdb.sqlite`](https://github.com/chandranshB/hello-world/releases/latest/download/SQLite_masterdb.sqlite) | [`SQLite_masterdb.sqlite.zip`](https://github.com/chandranshB/hello-world/releases/latest/download/SQLite_masterdb.sqlite.zip) | [`SQLite_masterdb.sql`](https://github.com/chandranshB/hello-world/releases/latest/download/SQLite_masterdb.sql)
+- **Parquet Bundle**: [`SQLite_masterdb.zip`](https://github.com/chandranshB/hello-world/releases/latest/download/SQLite_masterdb.zip)
 
 | Table | Rows | Parquet Size | Columns | Direct Download Link |
 | :--- | :--- | :--- | :--- | :--- |
@@ -24,8 +31,6 @@ You can download any specific table, download an entire database bundle, or dire
 
 ### 1. Download via Python CLI Helper (`download.py`)
 
-A zero-dependency helper included in the repository:
-
 ```bash
 # List all databases and tables
 python download.py --list
@@ -38,9 +43,6 @@ python download.py --db SQLite_masterdb
 
 # Download all databases
 python download.py --all
-
-# Print direct download URL
-python download.py --db SQLite_masterdb --table users --url
 ```
 
 ### 2. Direct Query in DuckDB (Zero local download required)

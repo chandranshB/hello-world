@@ -171,8 +171,17 @@ try {
         "--duckdb"
     )
 
+    # ---- package release assets (Parquet + SQLite) ------------------------
+    Write-Host "packaging release assets (Parquet & SQLite)" -ForegroundColor Cyan
+    Invoke-Python @(
+        "scripts\package_release_assets.py",
+        "--parquet-dir", $ParquetDir,
+        "--out-dir", "release_assets"
+    ) | Out-Null
+
     Write-Host ""
     Write-Host "parquet:  $(Resolve-Path $ParquetDir)" -ForegroundColor Green
+    Write-Host "sqlite:   $(Resolve-Path "release_assets")" -ForegroundColor Green
     Write-Host "manifest: $(Resolve-Path "$ParquetDir\manifest.json")"
     Write-Host "catalog:  $(Resolve-Path "$ParquetDir\catalog.duckdb")"
     Write-Host ""

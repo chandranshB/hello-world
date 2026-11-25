@@ -17,10 +17,13 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import sqlite3
 import sys
 import zipfile
 from collections import defaultdict
 from pathlib import Path
+
+import pyarrow.parquet as pq
 
 
 def human_size(size_bytes: int) -> str:
@@ -93,15 +96,89 @@ def package_assets(
                 zf.write(p, arcname=extra)
     print(f"Created all-in-one bundle: {all_zip_path.name} ({human_size(all_zip_path.stat().st_size)})")
 
-    # 4. Keep internal catalog/manifest inside the zip bundle only, not as loose bloated assets
-    # Loose assets are strictly clean: table parquets, per-DB zip, and all-databases zip
+    # 4. Build per-database SQLite dumps (<db>.sqlite, <db>.sql, and <db>.sqlite.zip)
+    for db, items in db_groups.items():
+        db_sqlite_path = out_dir / f"{db}.sqlite"
+        if db_sqlite_path.exists():
+            db_sqlite_path.unlink()
+        conn = sqlite3.connect(db_sqlite_path)
+        cur = conn.cursor()
+        for entry, src in items:
+            table = entry["table"]
+            pf = pq.ParquetFile(src)
+            cols = pf.schema.names
+            col_defs = ", ".join(f'"{c}"' for c in cols)
+            cur.execute(f'CREATE TABLE IF NOT EXISTS "{table}" ({col_defs})')
+            placeholders = ", ".join(["?"] * len(cols))
+            insert_sql = f'INSERT INTO "{table}" VALUES ({placeholders})'
+            for batch in pf.iter_batches(batch_size=65536):
+                pydict = batch.to_pydict()
+                rows = zip(*(pydict[c] for c in cols))
+                cur.executemany(insert_sql, rows)
+        cur.execute("PRAGMA optimize")
+        conn.commit()
 
-    # 5. Generate DATA_CATALOG.md with direct download links and examples
+        sql_dump_path = out_dir / f"{db}.sql"
+        with open(sql_dump_path, "w", encoding="utf-8") as sf:
+            for line in conn.iterdump():
+                sf.write(f"{line}\n")
+        conn.close()
+
+        db_sqlite_zip = out_dir / f"{db}.sqlite.zip"
+        with zipfile.ZipFile(db_sqlite_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(db_sqlite_path, arcname=f"{db}.sqlite")
+            zf.write(sql_dump_path, arcname=f"{db}.sql")
+        print(f"Created SQLite database: {db_sqlite_path.name} ({human_size(db_sqlite_path.stat().st_size)})")
+        print(f"Created SQLite bundle: {db_sqlite_zip.name} ({human_size(db_sqlite_zip.stat().st_size)})")
+
+    # 5. Build unified all-databases SQLite dump
+    all_sqlite_path = out_dir / "all-databases.sqlite"
+    if all_sqlite_path.exists():
+        all_sqlite_path.unlink()
+    all_conn = sqlite3.connect(all_sqlite_path)
+    all_cur = all_conn.cursor()
+    for db, items in db_groups.items():
+        for entry, src in items:
+            table = entry["table"]
+            safe_table = f"{db}_{table}" if len(db_groups) > 1 else table
+            pf = pq.ParquetFile(src)
+            cols = pf.schema.names
+            col_defs = ", ".join(f'"{c}"' for c in cols)
+            all_cur.execute(f'CREATE TABLE IF NOT EXISTS "{safe_table}" ({col_defs})')
+            placeholders = ", ".join(["?"] * len(cols))
+            insert_sql = f'INSERT INTO "{safe_table}" VALUES ({placeholders})'
+            for batch in pf.iter_batches(batch_size=65536):
+                pydict = batch.to_pydict()
+                rows = zip(*(pydict[c] for c in cols))
+                all_cur.executemany(insert_sql, rows)
+    all_cur.execute("PRAGMA optimize")
+    all_conn.commit()
+
+    all_sql_dump = out_dir / "all-databases.sql"
+    with open(all_sql_dump, "w", encoding="utf-8") as sf:
+        for line in all_conn.iterdump():
+            sf.write(f"{line}\n")
+    all_conn.close()
+
+    all_sqlite_zip = out_dir / "all-databases-sqlite.zip"
+    with zipfile.ZipFile(all_sqlite_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(all_sqlite_path, arcname="all-databases.sqlite")
+        zf.write(all_sql_dump, arcname="all-databases.sql")
+    print(f"Created unified SQLite database: {all_sqlite_path.name} ({human_size(all_sqlite_path.stat().st_size)})")
+    print(f"Created unified SQLite bundle: {all_sqlite_zip.name} ({human_size(all_sqlite_zip.stat().st_size)})")
+
+    # 6. Generate DATA_CATALOG.md with direct download links and examples
     catalog_lines = [
-        "# Parquet Data Catalog",
+        "# Data Catalog: Parquet & SQLite Dumps",
         "",
-        "This catalog lists all databases and tables dumped and converted to Parquet.",
-        "You can download any specific table, download an entire database bundle, or directly query any table in Python/DuckDB without downloading manually.",
+        "This catalog lists all databases and tables dumped, converted to Parquet, and compiled into SQLite databases.",
+        "You can download individual Parquet tables, SQLite databases, or complete bundles.",
+        "",
+        "## Complete Bundles (All Databases)",
+        "",
+        f"- **Complete SQLite Bundle**: [`all-databases-sqlite.zip`]({latest_download_url}/all-databases-sqlite.zip) (includes `.sqlite` + `.sql` dump)",
+        f"- **Complete Parquet Bundle**: [`all-databases-parquet.zip`]({latest_download_url}/all-databases-parquet.zip)",
+        f"- **Unified SQLite DB (Direct)**: [`all-databases.sqlite`]({latest_download_url}/all-databases.sqlite)",
         "",
         "## Summary of Databases",
         "",
@@ -117,7 +194,8 @@ def package_assets(
             f"- **Tables**: {len(items)}",
             f"- **Total Rows**: {total_rows:,}",
             f"- **Total Parquet Size**: {human_size(total_bytes)}",
-            f"- **Download All Tables for `{db}`**: [`{db_zip_name}`]({latest_download_url}/{db_zip_name})",
+            f"- **SQLite Database**: [`{db}.sqlite`]({latest_download_url}/{db}.sqlite) | [`{db}.sqlite.zip`]({latest_download_url}/{db}.sqlite.zip) | [`{db}.sql`]({latest_download_url}/{db}.sql)",
+            f"- **Parquet Bundle**: [`{db_zip_name}`]({latest_download_url}/{db_zip_name})",
             "",
             "| Table | Rows | Parquet Size | Columns | Direct Download Link |",
             "| :--- | :--- | :--- | :--- | :--- |",

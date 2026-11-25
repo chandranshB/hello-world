@@ -78,7 +78,7 @@ on:
         default: false
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: sqlmap-dump-to-parquet
@@ -226,6 +226,20 @@ jobs:
         if: always() && hashFiles('parquet/manifest.json') != ''
         run: |
           python scripts/package_release_assets.py --parquet-dir "$PARQUET_DIR" --out-dir release_assets
+
+      - name: Upload to GitHub Release
+        if: always() && hashFiles('release_assets/**') != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Latest Data Dumps (Parquet & SQLite)"
+          files: |
+            release_assets/*
+          prerelease: false
+          draft: false
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Report size
         if: always() && hashFiles('parquet/**') != ''

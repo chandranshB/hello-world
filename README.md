@@ -21,8 +21,11 @@ You can download individual tables directly using the standard naming format:
 | `SQLite_masterdb` | `users` | [Download `SQLite_masterdb.users.parquet`](https://github.com/chandranshB/hello-world/releases/latest/download/SQLite_masterdb.users.parquet) |
 | `SQLite_masterdb` | `orders` | [Download `SQLite_masterdb.orders.parquet`](https://github.com/chandranshB/hello-world/releases/latest/download/SQLite_masterdb.orders.parquet) |
 | `SQLite_masterdb` | `notes` | [Download `SQLite_masterdb.notes.parquet`](https://github.com/chandranshB/hello-world/releases/latest/download/SQLite_masterdb.notes.parquet) |
-| `SQLite_masterdb` | *(All tables)* | [Download `SQLite_masterdb.zip`](https://github.com/chandranshB/hello-world/releases/latest/download/SQLite_masterdb.zip) |
-| *(All DBs)* | *(All tables)* | [Download `all-databases-parquet.zip`](https://github.com/chandranshB/hello-world/releases/latest/download/all-databases-parquet.zip) |
+| `SQLite_masterdb` | *(SQLite DB)* | [Download `SQLite_masterdb.sqlite`](https://github.com/chandranshB/hello-world/releases/latest/download/SQLite_masterdb.sqlite) |
+| `SQLite_masterdb` | *(Parquet zip)* | [Download `SQLite_masterdb.zip`](https://github.com/chandranshB/hello-world/releases/latest/download/SQLite_masterdb.zip) |
+| *(All DBs)* | *(Unified SQLite DB)* | [Download `all-databases.sqlite`](https://github.com/chandranshB/hello-world/releases/latest/download/all-databases.sqlite) |
+| *(All DBs)* | *(SQLite Bundle: DB + .sql)* | [Download `all-databases-sqlite.zip`](https://github.com/chandranshB/hello-world/releases/latest/download/all-databases-sqlite.zip) |
+| *(All DBs)* | *(All Parquet tables)* | [Download `all-databases-parquet.zip`](https://github.com/chandranshB/hello-world/releases/latest/download/all-databases-parquet.zip) |
 
 ### Super Convenient Python Downloader (`download.py`)
 
@@ -32,13 +35,17 @@ No dependencies needed (standard library Python):
 # List all databases & tables
 python download.py --list
 
-# Download a specific table from a specific database:
+# Download as SQLite database (.sqlite):
+python download.py --db SQLite_masterdb --sqlite
+python download.py --sqlite
+
+# Download a specific Parquet table from a specific database:
 python download.py --db SQLite_masterdb --table users
 
-# Download all tables in a database:
+# Download all Parquet tables in a database:
 python download.py --db SQLite_masterdb
 
-# Download all databases and tables:
+# Download all databases and tables (Parquet):
 python download.py --all
 ```
 
