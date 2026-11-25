@@ -1,0 +1,7 @@
+# ==============================================================================
+# BI-WEEKLY TARGETS (Fetched Twice a Week: Mondays & Thursdays)
+# ==============================================================================
+# Fast-changing / frequently updated tables
+
+doon24.qbank
+doon25.qbank

@@ -644,6 +644,34 @@ def main(argv: list[str] | None = None) -> int:
             run_meta = None
 
     manifest_path = args.manifest or (out_root / "manifest.json")
+    
+    # Merge with previous manifest entries if present so no tables are lost across partial runs
+    merged_entries: dict[tuple[str, str], dict[str, Any]] = {}
+    if manifest_path.exists():
+        try:
+            prev_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            for entry in prev_manifest.get("files", []):
+                out_p = Path(entry.get("output", ""))
+                # Retain previous entry if the parquet file still exists on disk
+                if out_p.exists() or (out_root / entry["db"] / f"{entry['table']}.parquet").exists():
+                    merged_entries[(entry["db"], entry["table"])] = entry
+        except Exception:
+            pass
+
+    for entry in results:
+        merged_entries[(entry["db"], entry["table"])] = entry
+
+    all_files = sorted(merged_entries.values(), key=lambda e: (e["db"], e["table"]))
+    ok_files = [e for e in all_files if e.get("status") == "ok"]
+
+    totals = {
+        "files": len(ok_files),
+        "rows": sum(e.get("rows", 0) for e in ok_files),
+        "csv_bytes": sum(e.get("csv_bytes", 0) for e in ok_files),
+        "parquet_bytes": sum(e.get("parquet_bytes", 0) for e in ok_files),
+    }
+    totals["ratio"] = round(totals["csv_bytes"] / totals["parquet_bytes"], 2) if totals["parquet_bytes"] else None
+
     manifest = {
         "generated_at": utc_now(),
         "dump_root": str(dump_root),
@@ -659,8 +687,8 @@ def main(argv: list[str] | None = None) -> int:
         },
         "run": run_meta,
         "totals": totals,
-        "files": sorted(results, key=lambda e: (e["db"], e["table"])),
-        "errors": [e for e in results if e["status"] == "error"],
+        "files": all_files,
+        "errors": [e for e in all_files if e.get("status") == "error"],
     }
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")

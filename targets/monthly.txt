@@ -1,0 +1,12 @@
+# ==============================================================================
+# MONTHLY TARGETS (Fetched Once a Month: 1st of every month)
+# ==============================================================================
+# Stable reference tables (faculty, coordinators, course details)
+
+doon24.faculty
+doon24.course_coordinator
+doon24.course_detail
+
+doon25.faculty
+doon25.course_coordinator
+doon25.course_detail

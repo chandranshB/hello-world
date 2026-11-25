@@ -22,8 +22,8 @@
 [CmdletBinding()]
 param(
     [string]$Request = "",
-    [int]$Threads = 1,
-    [double]$Delay = 2.0,
+    [int]$Threads = 3,
+    [double]$Delay = 0.3,
     [int]$MaxMinutes = 240,
     [string]$Database = "",
     [string]$Tables = "",
