@@ -9,3 +9,5 @@ doon25.faculty
 doon25.course_coordinator
 doon25.course_detail
 doon25.qbank
+
+doon.qbank
