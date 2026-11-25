@@ -142,6 +142,9 @@ def discover_csv_files(root: Path, include: list[str], exclude: list[str]) -> li
     exclude_re = [re.compile(p) for p in exclude]
     found = []
     for path in sorted(root.rglob("*.csv")):
+        # Exclude sqlmap scan summary logs (e.g. results-*.csv) and hidden files
+        if path.name.startswith("results-") or path.stem.startswith("results-") or path.name.startswith("."):
+            continue
         rel = path.relative_to(root).as_posix()
         if include_re and not any(r.search(rel) for r in include_re):
             continue

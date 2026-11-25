@@ -59,6 +59,9 @@ def package_assets(
     for entry in entries:
         db = entry["db"]
         table = entry["table"]
+        # Exclude dummy/metadata databases, loose files, and sqlmap scan results
+        if db in ("_", "__", "", "default") or table.startswith("results-") or db.startswith("."):
+            continue
         src = parquet_dir / db / f"{table}.parquet"
         if not src.exists():
             # try fallback path from entry

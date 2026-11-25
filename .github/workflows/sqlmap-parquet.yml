@@ -274,6 +274,7 @@ jobs:
             gh release download latest -p "all-databases-parquet.zip" --dir previous_release || true
             if [ -f previous_release/all-databases-parquet.zip ]; then
               unzip -qo previous_release/all-databases-parquet.zip -d "$PARQUET_DIR"
+              rm -rf "$PARQUET_DIR/_" "$PARQUET_DIR"/results-* "$PARQUET_DIR"/.* 2>/dev/null || true
               echo "Successfully restored existing tables from latest release."
             fi
           else
