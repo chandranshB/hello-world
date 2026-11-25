@@ -258,7 +258,17 @@ def main(argv: list[str] | None = None) -> int:
     staged_out_arg = os.path.relpath(staged_out, Path.cwd())
 
     threads = max(1, min(args.threads, MAX_THREADS))
-    cmd: list[str] = [
+
+    # Check for targets.txt if no explicit db or tables passed
+    targets_file = Path("targets.txt")
+    multi_targets = []
+    if targets_file.exists() and not args.tables and not args.database and not args.list_tables:
+        lines = [line.strip() for line in targets_file.read_text(encoding="utf-8").splitlines() if line.strip() and not line.strip().startswith("#")]
+        if lines:
+            print(f"Loaded {len(lines)} target(s) from targets.txt", file=sys.stderr)
+            multi_targets = lines
+
+    base_cmd: list[str] = [
         sys.executable,
         str(sqlmap_py),
         input_flag,
@@ -267,25 +277,11 @@ def main(argv: list[str] | None = None) -> int:
         "--non-interactive",
     ]
     if args.optimize:
-        cmd.append("-o")
-    if args.list_tables:
-        if args.database:
-            cmd.append(f"-D={args.database}")
-        cmd.append("--tables")
-    elif args.tables:
-        if args.database:
-            cmd.append(f"-D={args.database}")
-        cmd.append(f"-T={args.tables}")
-        cmd.append("--dump")
-    elif args.database and not args.dump_all:
-        cmd.append(f"-D={args.database}")
-        cmd.append("--dump")
-    else:
-        if args.dump_all:
-            cmd.append("--dump-all")
+        base_cmd.append("-o")
     if args.exclude_sysdbs:
-        cmd.append("--exclude-sysdbs")
-    cmd += [
+        base_cmd.append("--exclude-sysdbs")
+
+    common_flags: list[str] = [
         f"--threads={threads}",
         f"--level={args.level}",
         f"--risk={args.risk}",
@@ -296,22 +292,62 @@ def main(argv: list[str] | None = None) -> int:
         "--disable-coloring",
     ]
     if args.fresh:
-        cmd.append("--flush-session")
+        common_flags.append("--flush-session")
     if args.technique:
-        cmd.append(f"--technique={args.technique}")
+        common_flags.append(f"--technique={args.technique}")
     if args.dbms:
-        cmd.append(f"--dbms={args.dbms}")
+        common_flags.append(f"--dbms={args.dbms}")
     if args.tamper:
-        cmd.append(f"--tamper={args.tamper}")
+        common_flags.append(f"--tamper={args.tamper}")
     if args.delay is not None:
-        cmd.append(f"--delay={args.delay}")
+        common_flags.append(f"--delay={args.delay}")
     if args.proxy:
-        cmd.append(f"--proxy={args.proxy}")
+        common_flags.append(f"--proxy={args.proxy}")
     if args.tor:
-        cmd.extend(["--tor", "--check-tor"])
-    cmd.extend(args.extra)
+        common_flags.extend(["--tor", "--check-tor"])
+    common_flags.extend(args.extra)
 
-    print("command: " + " ".join(cmd), file=sys.stderr)
+    commands: list[tuple[str, list[str]]] = []
+    if multi_targets:
+        targets_by_db: dict[str, list[str]] = {}
+        for item in multi_targets:
+            if "." in item:
+                d, _, t = item.partition(".")
+                targets_by_db.setdefault(d.strip(), []).append(t.strip())
+            elif ":" in item:
+                d, _, t = item.partition(":")
+                targets_by_db.setdefault(d.strip(), []).append(t.strip())
+            else:
+                targets_by_db.setdefault("default", []).append(item.strip())
+        for d, tbls in targets_by_db.items():
+            cmd = list(base_cmd)
+            if d != "default":
+                cmd.append(f"-D={d}")
+            cmd.extend([f"-T={','.join(tbls)}", "--dump"])
+            cmd.extend(common_flags)
+            commands.append((f"{d}: {','.join(tbls)}", cmd))
+    else:
+        cmd = list(base_cmd)
+        if args.list_tables:
+            if args.database:
+                cmd.append(f"-D={args.database}")
+            cmd.append("--tables")
+        elif args.tables:
+            if args.database:
+                cmd.append(f"-D={args.database}")
+            cmd.append(f"-T={args.tables}")
+            cmd.append("--dump")
+        elif args.database and not args.dump_all:
+            cmd.append(f"-D={args.database}")
+            cmd.append("--dump")
+        else:
+            if args.dump_all:
+                cmd.append("--dump-all")
+        cmd.extend(common_flags)
+        commands.append(("default", cmd))
+
+    for label, cmd in commands:
+        print(f"command [{label}]: " + " ".join(cmd), file=sys.stderr)
 
     if args.dry_run:
         return 0
@@ -320,8 +356,9 @@ def main(argv: list[str] | None = None) -> int:
     started = time.time()
     started_iso = utc_now()
     timed_out = False
-    returncode: int | None = None
+    returncode: int | None = 0
     error: str | None = None
+    all_cmds: list[list[str]] = []
 
     env = dict(os.environ)
     env.setdefault("PYTHONUNBUFFERED", "1")
@@ -329,47 +366,52 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         with open(log_file, "w", encoding="utf-8", errors="replace") as log_handle:
-            process = subprocess.Popen(
-                cmd,
-                cwd=str(Path.cwd()),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                bufsize=1,
-                env=env,
-            )
+            for label, cmd in commands:
+                all_cmds.append(cmd)
+                log_handle.write(f"\n=== Running sqlmap for [{label}] ===\n")
+                log_handle.flush()
+                process = subprocess.Popen(
+                    cmd,
+                    cwd=str(Path.cwd()),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    bufsize=1,
+                    env=env,
+                )
 
-            def pump() -> None:
-                assert process.stdout is not None
-                for line in process.stdout:
-                    log_handle.write(line)
-                    log_handle.flush()
-                    try:
-                        sys.stdout.write(line)
-                        sys.stdout.flush()
-                    except UnicodeEncodeError:
-                        # legacy console code page (cp1252): never let logging
-                        # kill the reader thread mid-run
-                        encoding = getattr(sys.stdout, "encoding", None) or "ascii"
-                        sys.stdout.write(line.encode(encoding, "replace").decode(encoding, "replace"))
-                        sys.stdout.flush()
+                def pump() -> None:
+                    assert process.stdout is not None
+                    for line in process.stdout:
+                        log_handle.write(line)
+                        log_handle.flush()
+                        try:
+                            sys.stdout.write(line)
+                            sys.stdout.flush()
+                        except UnicodeEncodeError:
+                            encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+                            sys.stdout.write(line.encode(encoding, "replace").decode(encoding, "replace"))
+                            sys.stdout.flush()
 
-            reader = threading.Thread(target=pump, daemon=True)
-            reader.start()
+                reader = threading.Thread(target=pump, daemon=True)
+                reader.start()
 
-            try:
-                returncode = process.wait(timeout=args.max_runtime or None)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                process.kill()
                 try:
-                    returncode = process.wait(timeout=30)
+                    rc = process.wait(timeout=args.max_runtime or None)
+                    if rc != 0:
+                        returncode = rc
                 except subprocess.TimeoutExpired:
-                    returncode = -1
-                error = f"deadline of {args.max_runtime}s exceeded; sqlmap killed"
-            reader.join(timeout=30)
+                    timed_out = True
+                    process.kill()
+                    try:
+                        returncode = process.wait(timeout=30)
+                    except subprocess.TimeoutExpired:
+                        returncode = -1
+                    error = f"deadline of {args.max_runtime}s exceeded; sqlmap killed"
+                    break
+                reader.join(timeout=30)
     except FileNotFoundError as exc:
         error = str(exc)
         print(f"error: {exc}", file=sys.stderr)
