@@ -33,9 +33,9 @@ on:
         type: string
         default: ""
       use_tor:
-        description: "Route all sqlmap traffic through free Tor anonymity network"
+        description: "Route traffic through Tor (not needed on GitHub Actions since runner IP is already an anonymous Azure cloud IP)"
         type: boolean
-        default: true
+        default: false
       threads:
         description: "sqlmap threads (1-10)"
         type: string
@@ -43,7 +43,7 @@ on:
       delay:
         description: "Delay between requests in seconds"
         type: string
-        default: "2"
+        default: "1"
       level:
         description: "sqlmap --level (1-5)"
         type: string
@@ -96,11 +96,11 @@ env:
   PARQUET_DIR: parquet
   REQUEST_PATH: ${{ inputs.request_path || 'login-request.txt' }}
   PROXY: ${{ inputs.proxy || '' }}
-  USE_TOR: ${{ inputs.use_tor != false }}
+  USE_TOR: ${{ inputs.use_tor || false }}
   DATABASE: ${{ inputs.database || '' }}
   TABLES: ${{ inputs.tables || '' }}
   THREADS: ${{ inputs.threads || '1' }}
-  DELAY: ${{ inputs.delay || '2' }}
+  DELAY: ${{ inputs.delay || '1' }}
   LEVEL: ${{ inputs.level || '1' }}
   RISK: ${{ inputs.risk || '1' }}
   MAX_MINUTES: ${{ inputs.max_runtime_minutes || '350' }}
@@ -145,10 +145,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq tor
-          sudo systemctl start tor || sudo service tor start || sudo tor --daemon 1
+          sudo /etc/init.d/tor start || sudo service tor start
           sleep 4
-          echo "Testing Tor SOCKS5 proxy on 127.0.0.1:9050..."
-          curl --socks5 127.0.0.1:9050 https://check.torproject.org/api/ip || true
 
       - name: Materialize request file
         env:
