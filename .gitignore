@@ -21,3 +21,5 @@ requests/live.http
 __pycache__/
 *.pyc
 .venv/
+
+*.zip
