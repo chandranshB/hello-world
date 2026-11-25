@@ -32,6 +32,10 @@ on:
         description: "HTTP/SOCKS proxy URL (optional, e.g. socks5://127.0.0.1:9050)"
         type: string
         default: ""
+      use_tor:
+        description: "Route all sqlmap traffic through free Tor anonymity network"
+        type: boolean
+        default: true
       threads:
         description: "sqlmap threads (1-10)"
         type: string
@@ -92,6 +96,7 @@ env:
   PARQUET_DIR: parquet
   REQUEST_PATH: ${{ inputs.request_path || 'login-request.txt' }}
   PROXY: ${{ inputs.proxy || '' }}
+  USE_TOR: ${{ inputs.use_tor != false }}
   DATABASE: ${{ inputs.database || '' }}
   TABLES: ${{ inputs.tables || '' }}
   THREADS: ${{ inputs.threads || '1' }}
@@ -134,6 +139,16 @@ jobs:
           git clone --depth 1 --branch "$SQLMAP_REF" https://github.com/sqlmapproject/sqlmap.git .sqlmap \
             || git clone --depth 1 https://github.com/sqlmapproject/sqlmap.git .sqlmap
           python .sqlmap/sqlmap.py --version --non-interactive
+
+      - name: Set up Tor anonymity service
+        if: env.USE_TOR == 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tor
+          sudo systemctl start tor || sudo service tor start || sudo tor --daemon 1
+          sleep 4
+          echo "Testing Tor SOCKS5 proxy on 127.0.0.1:9050..."
+          curl --socks5 127.0.0.1:9050 https://check.torproject.org/api/ip || true
 
       - name: Materialize request file
         env:
@@ -191,6 +206,7 @@ jobs:
           if [ -n "$DATABASE" ]; then extra_db_args+=("-D" "$DATABASE"); fi
           if [ -n "$TABLES" ]; then extra_db_args+=("-T" "$TABLES"); fi
           if [ -n "$PROXY" ]; then extra_db_args+=("--proxy" "$PROXY"); fi
+          if [ "$USE_TOR" = "true" ]; then extra_db_args+=("--tor"); fi
           python scripts/run_sqlmap.py \
             --sqlmap-dir .sqlmap \
             --request "$REQUEST_FILE" \
