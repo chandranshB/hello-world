@@ -322,24 +322,22 @@ def main(argv: list[str] | None = None) -> int:
         for d, tbls in targets_by_db.items():
             cmd = list(base_cmd)
             if d != "default":
-                cmd.append(f"-D={d}")
-            cmd.extend([f"-T={','.join(tbls)}", "--dump"])
+                cmd.extend(["-D", d])
+            cmd.extend(["-T", ",".join(tbls), "--dump"])
             cmd.extend(common_flags)
             commands.append((f"{d}: {','.join(tbls)}", cmd))
     else:
         cmd = list(base_cmd)
         if args.list_tables:
             if args.database:
-                cmd.append(f"-D={args.database}")
+                cmd.extend(["-D", args.database])
             cmd.append("--tables")
         elif args.tables:
             if args.database:
-                cmd.append(f"-D={args.database}")
-            cmd.append(f"-T={args.tables}")
-            cmd.append("--dump")
+                cmd.extend(["-D", args.database])
+            cmd.extend(["-T", args.tables, "--dump"])
         elif args.database and not args.dump_all:
-            cmd.append(f"-D={args.database}")
-            cmd.append("--dump")
+            cmd.extend(["-D", args.database, "--dump"])
         else:
             if args.dump_all:
                 cmd.append("--dump-all")
