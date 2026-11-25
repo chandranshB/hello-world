@@ -1,0 +1,20 @@
+# Hosts sqlmap is allowed to touch. One entry per line; '#' starts a comment.
+#
+# Matching rules (see scripts/preflight.py):
+#   db.example.com          exact host
+#   *.example.com           any subdomain of example.com
+#   db.example.com:8443     exact host and port
+#   10.20.30.0/24           IPv4/IPv6 CIDR
+#   2001:db8::/32           IPv6 CIDR
+#
+# This file ships empty on purpose: the workflow and the local runner both refuse
+# to start until the target you are authorized to test is listed here (or is
+# supplied through the ALLOWED_HOSTS secret).
+#
+# Examples (commented out):
+#   *.staging.internal
+#   10.0.0.0/8
+
+# The local throwaway target from tests/lab_server.py, used to smoke-test the
+# pipeline. Delete this line once the real lab host is listed below it.
+127.0.0.1:8080

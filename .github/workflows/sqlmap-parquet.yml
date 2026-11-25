@@ -1,0 +1,272 @@
+﻿name: sqlmap-dump-to-parquet
+
+# Cron + manual workflow: run sqlmap against a saved HTTP request, dump all
+# non-system DB data as CSV, convert CSVs to Parquet, verify, and upload artifacts.
+#
+# WHERE TO PUT login-request.txt (instructor gives it on practical day):
+#   1) Replace ./login-request.txt in the repo root, commit, and push.  (simplest)
+#   2) OR set Actions secret SQLMAP_REQUEST_B64 to base64 of the request file.
+#      The workflow materializes it at runtime and does not commit it.
+#
+# The target host from the request must be listed in targets/allowlist.txt or in
+# the ALLOWED_HOSTS secret, unless allow_unlisted is explicitly set for a lab run.
+
+on:
+  schedule:
+    - cron: "15 3 * * *"
+  workflow_dispatch:
+    inputs:
+      request_path:
+        description: "Request file in repo (raw HTTP, Burp XML, HAR, or bare URL)"
+        type: string
+        default: "login-request.txt"
+      threads:
+        description: "sqlmap threads (1-10)"
+        type: string
+        default: "10"
+      level:
+        description: "sqlmap --level (1-5)"
+        type: string
+        default: "1"
+      risk:
+        description: "sqlmap --risk (1-3)"
+        type: string
+        default: "1"
+      max_runtime_minutes:
+        description: "Hard deadline for the sqlmap run"
+        type: string
+        default: "350"
+      convert_workers:
+        description: "Parquet conversion workers (0 = all cores)"
+        type: string
+        default: "0"
+      infer_types:
+        description: "Promote int64/float64/bool columns instead of all-text"
+        type: boolean
+        default: false
+      map_sqlmap_null:
+        description: "Convert sqlmap's literal NULL token to a real Parquet NULL"
+        type: boolean
+        default: false
+      build_duckdb_catalog:
+        description: "Build catalog.duckdb with one view per table"
+        type: boolean
+        default: true
+      upload_to_s3:
+        description: "Sync the Parquet tree to AWS_BUCKET"
+        type: boolean
+        default: false
+      allow_unlisted:
+        description: "Skip allowlist check (authorized lab targets only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sqlmap-dump-to-parquet
+  cancel-in-progress: false
+
+env:
+  SQLMAP_REF: "1.9.11"
+  PYTHONUNBUFFERED: "1"
+  PYTHONIOENCODING: "utf-8"
+  OUTPUT_DIR: sqlmap-output
+  PARQUET_DIR: parquet
+  REQUEST_PATH: ${{ inputs.request_path || 'login-request.txt' }}
+  THREADS: ${{ inputs.threads || '10' }}
+  LEVEL: ${{ inputs.level || '1' }}
+  RISK: ${{ inputs.risk || '1' }}
+  MAX_MINUTES: ${{ inputs.max_runtime_minutes || '350' }}
+  CONVERT_WORKERS: ${{ inputs.convert_workers || '0' }}
+  INFER_FLAG: ${{ inputs.infer_types && '--infer-types' || '' }}
+  NULL_FLAG: ${{ inputs.map_sqlmap_null && '--null-token NULL' || '' }}
+  CATALOG_FLAG: ${{ (github.event_name == 'schedule' || inputs.build_duckdb_catalog) && '--catalog' || '' }}
+  UPLOAD_S3: ${{ inputs.upload_to_s3 || false }}
+  ALLOW_UNLISTED_FLAG: ${{ inputs.allow_unlisted && '--allow-unlisted' || '' }}
+
+jobs:
+  dump-and-convert:
+    name: Dump and convert
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install conversion dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -c "import pyarrow, duckdb; print('pyarrow', pyarrow.__version__, '| duckdb', duckdb.__version__)"
+
+      - name: Install sqlmap (pinned)
+        run: |
+          git clone --depth 1 --branch "$SQLMAP_REF" https://github.com/sqlmapproject/sqlmap.git .sqlmap \
+            || git clone --depth 1 https://github.com/sqlmapproject/sqlmap.git .sqlmap
+          python .sqlmap/sqlmap.py --version --non-interactive
+
+      - name: Materialize request file
+        env:
+          SQLMAP_REQUEST_B64: ${{ secrets.SQLMAP_REQUEST_B64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p requests
+          if [ -n "${SQLMAP_REQUEST_B64:-}" ]; then
+            printf '%s' "$SQLMAP_REQUEST_B64" | base64 -d > requests/live.http
+            request=requests/live.http
+            echo "::notice::request supplied via SQLMAP_REQUEST_B64 secret"
+          else
+            request=""
+            for candidate in "$REQUEST_PATH" login-request.txt requests/login-request.txt requests/target.http; do
+              if [ -s "$candidate" ]; then request="$candidate"; break; fi
+            done
+            if [ -z "$request" ]; then
+              echo "::error::No request file found. Upload login-request.txt to the repo root, or set SQLMAP_REQUEST_B64 secret."
+              echo "Looked for: $REQUEST_PATH, login-request.txt, requests/login-request.txt, requests/target.http"
+              exit 1
+            fi
+          fi
+          echo "REQUEST_FILE=$request" >> "$GITHUB_ENV"
+          echo "Using request file: $request"
+          head -n 1 "$request" | sed 's/\r$//'
+
+      - name: Resolve allowlist
+        env:
+          ALLOWED_HOSTS: ${{ secrets.ALLOWED_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [ -n "${ALLOWED_HOSTS:-}" ]; then
+            printf '%s\n' "$ALLOWED_HOSTS" > targets/allowlist.runtime.txt
+            allowlist=targets/allowlist.runtime.txt
+          else
+            allowlist=targets/allowlist.txt
+          fi
+          echo "ALLOWLIST=$allowlist" >> "$GITHUB_ENV"
+          echo "--- allowlist ---"
+          cat "$allowlist" || true
+
+      - name: Preflight (target must be allowlisted)
+        run: |
+          python scripts/preflight.py \
+            --request "$REQUEST_FILE" \
+            --allowlist "$ALLOWLIST" \
+            $ALLOW_UNLISTED_FLAG
+
+      - name: Run sqlmap
+        id: sqlmap
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          python scripts/run_sqlmap.py \
+            --sqlmap-dir .sqlmap \
+            --request "$REQUEST_FILE" \
+            --allowlist "$ALLOWLIST" \
+            --output-dir "$OUTPUT_DIR" \
+            --threads "$THREADS" \
+            --level "$LEVEL" \
+            --risk "$RISK" \
+            --max-runtime "$(( MAX_MINUTES * 60 ))" \
+            $ALLOW_UNLISTED_FLAG
+
+      - name: Convert CSV dumps to Parquet
+        if: always() && hashFiles('sqlmap-output/**/*.csv') != ''
+        run: |
+          python scripts/csv_to_parquet.py \
+            --dump-root "$OUTPUT_DIR" \
+            --out "$PARQUET_DIR" \
+            --workers "$CONVERT_WORKERS" \
+            --compression zstd \
+            --checksum \
+            --run-meta "$OUTPUT_DIR/run.json" \
+            --summary-md "$PARQUET_DIR/summary.md" \
+            $INFER_FLAG $NULL_FLAG $CATALOG_FLAG
+
+      - name: Verify Parquet
+        if: always() && hashFiles('parquet/manifest.json') != ''
+        run: |
+          python scripts/verify_parquet.py --manifest parquet/manifest.json --checksum --duckdb
+
+      - name: Report size
+        if: always() && hashFiles('parquet/**') != ''
+        run: |
+          echo "parquet tree: $(du -sh "$PARQUET_DIR" | cut -f1)"
+          find "$PARQUET_DIR" -name '*.parquet' -size +1G -printf '%s %p\n' | sort -rn || true
+
+      - name: Publish summary
+        if: always()
+        run: |
+          {
+            if [ -f "$PARQUET_DIR/summary.md" ]; then
+              cat "$PARQUET_DIR/summary.md"
+            else
+              echo "## sqlmap -> Parquet"
+              echo ""
+              echo "No tables were dumped. Check the **Run sqlmap** step and \`sqlmap-console.log\`."
+              echo ""
+              echo "Expected request file: \`$REQUEST_PATH\` (or \`login-request.txt\` in repo root, or \`SQLMAP_REQUEST_B64\` secret)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Parquet artifact
+        if: always() && hashFiles('parquet/**') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: parquet-${{ github.run_id }}
+          path: |
+            parquet/
+          if-no-files-found: warn
+          retention-days: 90
+          compression-level: 0
+
+      - name: Upload logs
+        if: always() && hashFiles('sqlmap-output/**') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: sqlmap-logs-${{ github.run_id }}
+          path: |
+            sqlmap-output/run.json
+            sqlmap-output/sqlmap-console.log
+            sqlmap-output/**/log
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Sync to S3
+        if: always() && env.UPLOAD_S3 == 'true' && hashFiles('parquet/**') != ''
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
+          AWS_PREFIX: ${{ secrets.AWS_PREFIX }}
+        run: |
+          aws s3 sync "$PARQUET_DIR" "s3://$AWS_BUCKET/${AWS_PREFIX:-sqlmap}/${{ github.run_id }}/" \
+            --only-show-errors --sse AES256
+
+      - name: Gate on sqlmap result
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, pathlib, sys
+
+          run = pathlib.Path("sqlmap-output/run.json")
+          if not run.exists():
+              print("::error::sqlmap did not run (preflight block, missing request, missing sqlmap, or setup failure)")
+              sys.exit(1)
+
+          meta = json.loads(run.read_text(encoding="utf-8"))
+          print(f"sqlmap exit={meta['returncode']} timeout={meta['timed_out']} duration={meta['duration_seconds']}s")
+          if not meta["ok"]:
+              print("::error::sqlmap run failed; see sqlmap-console.log artifact")
+              sys.exit(1)
+          print("::notice::sqlmap finished cleanly")
+          PY

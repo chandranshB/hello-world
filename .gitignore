@@ -1,0 +1,23 @@
+# sqlmap working copy (cloned by run.ps1 / the workflow)
+.sqlmap/
+
+# space-free staging directory the wrapper hands to sqlmap
+.sqlmap-run/
+
+# generated results
+sqlmap-output/
+parquet/
+
+# local lab fixture
+tests/lab.db
+tests/lab.out
+tests/lab.err
+tests/lab.pid
+run*.log
+
+# request materialized from a secret at runtime
+requests/live.http
+
+__pycache__/
+*.pyc
+.venv/
