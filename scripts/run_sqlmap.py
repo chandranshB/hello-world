@@ -38,6 +38,13 @@ import preflight  # noqa: E402  (local module)
 
 MAX_THREADS = 10
 
+# Automatic server-side extraction filters for known large or dated tables.
+# sqlmap passes these via --where so the database filters rows at fetch time,
+# avoiding downloading unneeded historic rows over the network.
+DEFAULT_TABLE_WHERE: dict[str, str] = {
+    "course_coordinator": "date1 >= '2026-01-01'",
+}
+
 # Where the request file is looked for when --request is omitted. The first
 # non-empty match wins; "login-request.txt" is first because that is the name
 # handed out for the course exercise.
@@ -162,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--delay", type=float, default=0.3, help="seconds between requests (default 0.3s for safe balanced execution)")
     parser.add_argument("--timeout", type=float, default=30.0, help="per-request timeout seconds")
     parser.add_argument("--retries", type=int, default=3)
+    parser.add_argument("--where", default=None, help="custom WHERE condition to apply during dump (e.g. date1 >= '2026-01-01')")
     parser.add_argument("--dump-all", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--exclude-sysdbs", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--optimize", action=argparse.BooleanOptionalAction, default=True)
@@ -323,14 +331,27 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 targets_by_db.setdefault("default", []).append(item.strip())
         for d, tbls in targets_by_db.items():
-            cmd = list(base_cmd)
-            if d != "default":
-                cmd.extend(["-D", d])
-            cmd.extend(["-T", ",".join(tbls), "--dump"])
-            cmd.extend(common_flags)
-            commands.append((f"{d}: {','.join(tbls)}", cmd))
+            # Group tables by their WHERE clause so tables with special extraction filters
+            # (such as course_coordinator requiring date1 >= '2026-01-01')
+            # are dumped with --where on the server side without breaking tables lacking that column.
+            where_groups: dict[str | None, list[str]] = {}
+            for t in tbls:
+                w = args.where if args.where else DEFAULT_TABLE_WHERE.get(t.lower())
+                where_groups.setdefault(w, []).append(t)
+
+            for where_clause, sub_tbls in where_groups.items():
+                cmd = list(base_cmd)
+                if d != "default":
+                    cmd.extend(["-D", d])
+                cmd.extend(["-T", ",".join(sub_tbls), "--dump"])
+                if where_clause:
+                    cmd.append(f"--where={where_clause}")
+                cmd.extend(common_flags)
+                label = f"{d}: {','.join(sub_tbls)}" + (f" (WHERE {where_clause})" if where_clause else "")
+                commands.append((label, cmd))
     else:
         cmd = list(base_cmd)
+        where_clause = args.where
         if args.list_tables:
             if args.database:
                 cmd.extend(["-D", args.database])
@@ -339,11 +360,19 @@ def main(argv: list[str] | None = None) -> int:
             if args.database:
                 cmd.extend(["-D", args.database])
             cmd.extend(["-T", args.tables, "--dump"])
+            if not where_clause and args.tables.lower() in DEFAULT_TABLE_WHERE:
+                where_clause = DEFAULT_TABLE_WHERE[args.tables.lower()]
+            if where_clause:
+                cmd.append(f"--where={where_clause}")
         elif args.database and not args.dump_all:
             cmd.extend(["-D", args.database, "--dump"])
+            if where_clause:
+                cmd.append(f"--where={where_clause}")
         else:
             if args.dump_all:
                 cmd.append("--dump-all")
+            if where_clause:
+                cmd.append(f"--where={where_clause}")
         cmd.extend(common_flags)
         commands.append(("default", cmd))
 
