@@ -20,10 +20,26 @@ on:
         description: "Request file in repo (raw HTTP, Burp XML, HAR, or bare URL)"
         type: string
         default: "login-request.txt"
+      database:
+        description: "Specific database to dump (-D), leave blank for all"
+        type: string
+        default: ""
+      tables:
+        description: "Specific table(s) to dump (-T, comma-separated), leave blank for all"
+        type: string
+        default: ""
+      proxy:
+        description: "HTTP/SOCKS proxy URL (optional, e.g. socks5://127.0.0.1:9050)"
+        type: string
+        default: ""
       threads:
         description: "sqlmap threads (1-10)"
         type: string
-        default: "10"
+        default: "1"
+      delay:
+        description: "Delay between requests in seconds"
+        type: string
+        default: "2"
       level:
         description: "sqlmap --level (1-5)"
         type: string
@@ -37,9 +53,9 @@ on:
         type: string
         default: "350"
       convert_workers:
-        description: "Parquet conversion workers (0 = all cores)"
+        description: "Parquet conversion workers (1 = single worker, 0 = all cores)"
         type: string
-        default: "0"
+        default: "1"
       infer_types:
         description: "Promote int64/float64/bool columns instead of all-text"
         type: boolean
@@ -75,11 +91,15 @@ env:
   OUTPUT_DIR: sqlmap-output
   PARQUET_DIR: parquet
   REQUEST_PATH: ${{ inputs.request_path || 'login-request.txt' }}
-  THREADS: ${{ inputs.threads || '10' }}
+  PROXY: ${{ inputs.proxy || '' }}
+  DATABASE: ${{ inputs.database || '' }}
+  TABLES: ${{ inputs.tables || '' }}
+  THREADS: ${{ inputs.threads || '1' }}
+  DELAY: ${{ inputs.delay || '2' }}
   LEVEL: ${{ inputs.level || '1' }}
   RISK: ${{ inputs.risk || '1' }}
   MAX_MINUTES: ${{ inputs.max_runtime_minutes || '350' }}
-  CONVERT_WORKERS: ${{ inputs.convert_workers || '0' }}
+  CONVERT_WORKERS: ${{ inputs.convert_workers || '1' }}
   INFER_FLAG: ${{ inputs.infer_types && '--infer-types' || '' }}
   NULL_FLAG: ${{ inputs.map_sqlmap_null && '--null-token NULL' || '' }}
   CATALOG_FLAG: ${{ (github.event_name == 'schedule' || inputs.build_duckdb_catalog) && '--catalog' || '' }}
@@ -167,15 +187,21 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
+          extra_db_args=()
+          if [ -n "$DATABASE" ]; then extra_db_args+=("-D" "$DATABASE"); fi
+          if [ -n "$TABLES" ]; then extra_db_args+=("-T" "$TABLES"); fi
+          if [ -n "$PROXY" ]; then extra_db_args+=("--proxy" "$PROXY"); fi
           python scripts/run_sqlmap.py \
             --sqlmap-dir .sqlmap \
             --request "$REQUEST_FILE" \
             --allowlist "$ALLOWLIST" \
             --output-dir "$OUTPUT_DIR" \
             --threads "$THREADS" \
+            --delay "$DELAY" \
             --level "$LEVEL" \
             --risk "$RISK" \
             --max-runtime "$(( MAX_MINUTES * 60 ))" \
+            "${extra_db_args[@]}" \
             $ALLOW_UNLISTED_FLAG
 
       - name: Convert CSV dumps to Parquet

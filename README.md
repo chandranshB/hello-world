@@ -123,9 +123,9 @@ Workflow: [`.github/workflows/sqlmap-parquet.yml`](.github/workflows/sqlmap-parq
 - Installs Python dependencies, clones a pinned sqlmap release, runs preflight,
   runs sqlmap, converts dumped CSVs to Parquet, verifies Parquet, and uploads
   artifacts.
-- Uses the maximum practical GitHub-hosted compute settings exposed by the
-  workflow: `threads=10`, all CPU cores for Parquet conversion, and a long
-  runtime limit.
+- Uses slow, stealthy, gentle settings to minimize target server load:
+  `threads=1`, `delay=2`s between requests, unoptimized connections, and a single worker
+  for Parquet conversion.
 
 Artifacts:
 
@@ -138,7 +138,21 @@ Artifacts:
 PowerShell wrapper:
 
 ```powershell
-.\run.ps1 -Request login-request.txt -Threads 10 -MaxMinutes 240
+# 1. Enumerate tables only (find what tables exist without dumping rows)
+.\run.ps1 -Request login-request.txt -ListTables
+
+# 2. Dump only specific tables (e.g. users and orders from a database)
+.\run.ps1 -Request login-request.txt -Database SQLite_masterdb -Tables users,orders -Delay 2
+
+# 3. Dump tables across DIFFERENT databases in one go:
+# Option A: List them directly in targets.txt (one per line: database.table), then run:
+.\run.ps1 -Request login-request.txt
+
+# Option B: Pass them directly on the command line:
+.\run.ps1 -Request login-request.txt -Targets "db1.users", "db2.orders", "db2.payments"
+
+# 4. Full run (all tables)
+.\run.ps1 -Request login-request.txt -Threads 1 -Delay 2 -MaxMinutes 240
 ```
 
 Manual commands:
@@ -147,11 +161,15 @@ Manual commands:
 python -m pip install -r requirements.txt
 git clone --depth 1 --branch 1.9.11 https://github.com/sqlmapproject/sqlmap.git .sqlmap
 
+# Enumerate tables only:
+python scripts/run_sqlmap.py --request login-request.txt --allowlist targets/allowlist.txt --list-tables
+
+# Dump specific tables only:
 python scripts/run_sqlmap.py --request login-request.txt --allowlist targets/allowlist.txt `
-  --output-dir sqlmap-output --threads 10 --max-runtime 14400
+  -D SQLite_masterdb -T users,orders --output-dir sqlmap-output --threads 1 --delay 2
 
 python scripts/csv_to_parquet.py --dump-root sqlmap-output --out parquet `
-  --workers 0 --compression zstd --checksum --catalog --run-meta sqlmap-output/run.json
+  --workers 1 --compression zstd --checksum --catalog --run-meta sqlmap-output/run.json
 
 python scripts/verify_parquet.py --manifest parquet/manifest.json --checksum --duckdb
 ```

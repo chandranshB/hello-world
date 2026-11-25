@@ -22,8 +22,16 @@
 [CmdletBinding()]
 param(
     [string]$Request = "",
-    [int]$Threads = 10,
+    [int]$Threads = 1,
+    [double]$Delay = 2.0,
     [int]$MaxMinutes = 240,
+    [string]$Database = "",
+    [string]$Tables = "",
+    [string[]]$Targets = @(),
+    [string]$TargetsFile = "",
+    [string]$Proxy = "",
+    [switch]$Tor,
+    [switch]$ListTables,
     [string]$OutputDir = "sqlmap-output",
     [string]$ParquetDir = "parquet",
     [switch]$AllowUnlisted,
@@ -58,20 +66,78 @@ try {
 
     # ---- dump -------------------------------------------------------------
     if (-not $SkipSqlmap) {
-        $sqlmapArgs = @(
+        $baseArgs = @(
             "scripts\run_sqlmap.py",
             "--sqlmap-dir", ".sqlmap",
             "--output-dir", $OutputDir,
             "--threads", "$Threads",
+            "--delay", "$Delay",
             "--max-runtime", "$($MaxMinutes * 60)"
         )
-        if ($Request) { $sqlmapArgs += @("--request", $Request) }
-        if ($AllowUnlisted) { $sqlmapArgs += "--allow-unlisted" }
-        if ($Fresh) { $sqlmapArgs += "--fresh" }
+        if ($Request) { $baseArgs += @("--request", $Request) }
+        if ($Proxy) { $baseArgs += @("--proxy", $Proxy) }
+        if ($Tor) { $baseArgs += "--tor" }
+        if ($AllowUnlisted) { $baseArgs += "--allow-unlisted" }
+        if ($Fresh) { $baseArgs += "--fresh" }
 
-        $sqlmapExit = Invoke-Python $sqlmapArgs
-        if ($sqlmapExit -ne 0) {
-            Write-Warning "sqlmap wrapper exited $sqlmapExit; converting whatever was dumped"
+        if ($ListTables) {
+            $sqlmapArgs = $baseArgs + @("--list-tables")
+            if ($Database) { $sqlmapArgs += @("-D", $Database) }
+            $sqlmapExit = Invoke-Python $sqlmapArgs
+            if ($sqlmapExit -eq 0) {
+                Write-Host "Table enumeration complete." -ForegroundColor Green
+            }
+            return
+        }
+
+        # Check if multiple targets in "db.table" format are specified
+        $allTargets = @()
+        if ($TargetsFile -and (Test-Path $TargetsFile)) {
+            $allTargets += Get-Content $TargetsFile | Where-Object { $_ -and -not $_.Trim().StartsWith('#') }
+        } elseif (-not $Targets -and -not $Tables -and -not $Database -and (Test-Path "targets.txt")) {
+            $fileLines = Get-Content "targets.txt" | Where-Object { $_ -and -not $_.Trim().StartsWith('#') }
+            if ($fileLines.Count -gt 0) {
+                Write-Host "Found targets.txt with $($fileLines.Count) target table(s)." -ForegroundColor Yellow
+                $allTargets += $fileLines
+            }
+        }
+        if ($Targets) { $allTargets += $Targets }
+        if ($Tables -and $Tables -match '[.:]') { $allTargets += $Tables -split ',' }
+
+        if ($allTargets.Count -gt 0) {
+            $grouped = [ordered]@{}
+            foreach ($item in $allTargets) {
+                $trimmed = $item.Trim()
+                if ($trimmed -match '^([^.:]+)[.:](.+)$') {
+                    $d = $matches[1]
+                    $t = $matches[2]
+                    if (-not $grouped.Contains($d)) { $grouped[$d] = [System.Collections.Generic.List[string]]::new() }
+                    $grouped[$d].Add($t)
+                } else {
+                    $d = if ($Database) { $Database } else { "default" }
+                    if (-not $grouped.Contains($d)) { $grouped[$d] = [System.Collections.Generic.List[string]]::new() }
+                    $grouped[$d].Add($trimmed)
+                }
+            }
+
+            foreach ($d in $grouped.Keys) {
+                $tblStr = $grouped[$d] -join ","
+                Write-Host "Dumping database [$d] table(s) [$tblStr]..." -ForegroundColor Cyan
+                $groupArgs = $baseArgs + @("-D", $d, "-T", $tblStr)
+                $sqlmapExit = Invoke-Python $groupArgs
+                if ($sqlmapExit -ne 0) {
+                    Write-Warning "sqlmap dump for $d exited with $sqlmapExit"
+                }
+            }
+        } else {
+            $sqlmapArgs = $baseArgs
+            if ($Database) { $sqlmapArgs += @("-D", $Database) }
+            if ($Tables) { $sqlmapArgs += @("-T", $Tables) }
+
+            $sqlmapExit = Invoke-Python $sqlmapArgs
+            if ($sqlmapExit -ne 0) {
+                Write-Warning "sqlmap wrapper exited $sqlmapExit; converting whatever was dumped"
+            }
         }
     }
 
@@ -84,7 +150,7 @@ try {
         "scripts\csv_to_parquet.py",
         "--dump-root", $OutputDir,
         "--out", $ParquetDir,
-        "--workers", "0",
+        "--workers", "1",
         "--compression", "zstd",
         "--checksum",
         "--catalog",

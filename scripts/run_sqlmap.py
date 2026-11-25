@@ -147,18 +147,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--log-file", type=Path, default=None)
 
-    parser.add_argument("--threads", type=int, default=10, help=f"1..{MAX_THREADS} (default 10)")
+    parser.add_argument("--threads", type=int, default=1, help=f"1..{MAX_THREADS} (default 1)")
     parser.add_argument("--level", type=int, default=1, choices=range(1, 6))
     parser.add_argument("--risk", type=int, default=1, choices=range(1, 5))
     parser.add_argument("--technique", default=None, help="e.g. BEUSTQ")
     parser.add_argument("--dbms", default=None)
+    parser.add_argument("-D", "--db", "--database", dest="database", default=None, help="DBMS database to enumerate/dump")
+    parser.add_argument("-T", "--tbl", "--table", "--tables", dest="tables", default=None, help="DBMS table(s) to dump (comma-separated)")
+    parser.add_argument("--list-tables", action="store_true", help="enumerate tables only without dumping data")
     parser.add_argument("--tamper", default=None, help="comma-separated tamper scripts")
-    parser.add_argument("--delay", type=float, default=None, help="seconds between requests")
+    parser.add_argument("--proxy", default=None, help="HTTP/SOCKS proxy (e.g. http://127.0.0.1:8080 or socks5://127.0.0.1:9050)")
+    parser.add_argument("--tor", action="store_true", help="route all traffic through Tor anonymity network")
+    parser.add_argument("--delay", type=float, default=2.0, help="seconds between requests (default 2.0s for slow execution)")
     parser.add_argument("--timeout", type=float, default=30.0, help="per-request timeout seconds")
     parser.add_argument("--retries", type=int, default=3)
     parser.add_argument("--dump-all", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--exclude-sysdbs", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--optimize", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--optimize", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--fresh", action="store_true", help="flush the sqlmap session before running")
     parser.add_argument("--max-runtime", type=int, default=0, help="hard deadline in seconds (0 = none)")
     parser.add_argument("--extra", action="append", default=[], help="extra sqlmap argument (repeatable)")
@@ -240,6 +245,11 @@ def main(argv: list[str] | None = None) -> int:
         shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(parents=True, exist_ok=True)
     staged_out = staging / "out"
+    if output_dir.exists() and any(output_dir.iterdir()):
+        try:
+            shutil.copytree(output_dir, staged_out, dirs_exist_ok=True)
+        except OSError:
+            pass
 
     if input_flag in ("-r", "-l"):
         staged_request = staging / f"request{request.suffix or '.txt'}"
@@ -258,8 +268,21 @@ def main(argv: list[str] | None = None) -> int:
     ]
     if args.optimize:
         cmd.append("-o")
-    if args.dump_all:
-        cmd.append("--dump-all")
+    if args.list_tables:
+        if args.database:
+            cmd.append(f"-D={args.database}")
+        cmd.append("--tables")
+    elif args.tables:
+        if args.database:
+            cmd.append(f"-D={args.database}")
+        cmd.append(f"-T={args.tables}")
+        cmd.append("--dump")
+    elif args.database and not args.dump_all:
+        cmd.append(f"-D={args.database}")
+        cmd.append("--dump")
+    else:
+        if args.dump_all:
+            cmd.append("--dump-all")
     if args.exclude_sysdbs:
         cmd.append("--exclude-sysdbs")
     cmd += [
@@ -282,6 +305,10 @@ def main(argv: list[str] | None = None) -> int:
         cmd.append(f"--tamper={args.tamper}")
     if args.delay is not None:
         cmd.append(f"--delay={args.delay}")
+    if args.proxy:
+        cmd.append(f"--proxy={args.proxy}")
+    if args.tor:
+        cmd.extend(["--tor", "--check-tor"])
     cmd.extend(args.extra)
 
     print("command: " + " ".join(cmd), file=sys.stderr)
@@ -375,6 +402,8 @@ def main(argv: list[str] | None = None) -> int:
         "output_dir": str(output_dir),
         "log_file": str(log_file),
         "threads": threads,
+        "database": args.database,
+        "tables": args.tables,
         "dump_all": args.dump_all,
         "exclude_sysdbs": args.exclude_sysdbs,
         "level": args.level,

@@ -1,0 +1,11 @@
+# TARGET TABLES LIST
+
+doon24.faculty
+doon24.course_coordinator
+doon24.course_detail
+doon24.qbank
+
+doon25.faculty
+doon25.course_coordinator
+doon25.course_detail
+doon25.qbank
