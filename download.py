@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -38,36 +39,53 @@ DEFAULT_REPO = "chandranshB/hello-world"
 DEFAULT_TAG = "v1.0.0"
 
 
-def fetch_manifest(repo: str, tag: str) -> dict | None:
-    # First try local manifest if repo is cloned locally
-    local_manifest = Path("parquet") / "manifest.json"
-    if local_manifest.exists():
-        try:
-            return json.loads(local_manifest.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-
-    # Fetch from release
-    url = f"https://github.com/{repo}/releases/download/{tag}/manifest.json"
-    req = urllib.request.Request(url, headers={"User-Agent": "sqlmap-parquet-downloader"})
+def fetch_release_assets(repo: str, tag: str) -> list[dict]:
+    url = f"https://api.github.com/repos/{repo}/releases/tags/{tag}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "sqlmap-parquet-downloader",
+            "Accept": "application/vnd.github.v3+json",
+        },
+    )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            data = json.loads(resp.read().decode("utf-8"))
+            return data.get("assets", [])
     except Exception as exc:
-        print(f"warning: could not fetch remote manifest ({exc})", file=sys.stderr)
-        return None
+        print(f"warning: could not fetch release assets via GitHub API ({exc})", file=sys.stderr)
+        return []
 
 
-def get_table_url(repo: str, tag: str, db: str, table: str) -> str:
-    return f"https://github.com/{repo}/releases/download/{tag}/{db}.{table}.parquet"
+def parse_catalog_from_assets(assets: list[dict], repo: str, tag: str) -> dict[str, dict]:
+    """
+    Returns a dict of {db_name: {"tables": {table_name: {"size": int, "url": str}}, "zip_url": str}}
+    """
+    catalog: dict[str, dict] = {}
 
+    for asset in assets:
+        name = asset.get("name", "")
+        size = asset.get("size", 0)
+        url = asset.get("browser_download_url", "")
 
-def get_db_zip_url(repo: str, tag: str, db: str) -> str:
-    return f"https://github.com/{repo}/releases/download/{tag}/{db}.zip"
+        # Match <db>.<table_name>.parquet
+        if name.endswith(".parquet") and "." in name:
+            parts = name.split(".")
+            if len(parts) >= 3:
+                db = parts[0]
+                table = parts[1]
+                if db not in catalog:
+                    catalog[db] = {"tables": {}, "zip_url": ""}
+                catalog[db]["tables"][table] = {"size": size, "url": url}
 
+        # Match <db>.zip
+        elif name.endswith(".zip") and name != "all-databases-parquet.zip":
+            db = name[:-4]
+            if db not in catalog:
+                catalog[db] = {"tables": {}, "zip_url": ""}
+            catalog[db]["zip_url"] = url
 
-def get_all_zip_url(repo: str, tag: str) -> str:
-    return f"https://github.com/{repo}/releases/download/{tag}/all-databases-parquet.zip"
+    return catalog
 
 
 def download_file(url: str, dest_path: Path) -> bool:
@@ -104,30 +122,6 @@ def download_file(url: str, dest_path: Path) -> bool:
         return False
 
 
-def list_catalog(manifest: dict | None, repo: str, tag: str) -> None:
-    print(f"\n=== Parquet Data Catalog ({repo} @ {tag}) ===")
-    if not manifest:
-        print("No manifest found. Defaulting to available tables in release:")
-        print(f"  - SQLite_masterdb: notes, orders, users")
-        return
-
-    files = [f for f in manifest.get("files", []) if f.get("status") == "ok"]
-    dbs: dict[str, list] = {}
-    for f in files:
-        dbs.setdefault(f["db"], []).append(f)
-
-    for db, tables in sorted(dbs.items()):
-        print(f"\nDatabase: {db} ({len(tables)} tables)")
-        print(f"  Whole DB bundle: {get_db_zip_url(repo, tag, db)}")
-        print(f"  {'Table':<25} {'Rows':>8} {'Size':>10}  {'Direct URL'}")
-        print("  " + "-" * 75)
-        for t in tables:
-            size_kb = (t.get("parquet_bytes", 0) / 1024)
-            direct_url = get_table_url(repo, tag, db, t["table"])
-            print(f"  {t['table']:<25} {t.get('rows', 0):>8,} {size_kb:>8.1f}KB  {direct_url}")
-    print()
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -143,19 +137,45 @@ def main() -> int:
     parser.add_argument("--sql", help="Run a DuckDB SQL query against the table (requires duckdb)")
     args = parser.parse_args()
 
-    manifest = fetch_manifest(args.repo, args.tag)
+    assets = fetch_release_assets(args.repo, args.tag)
+    catalog = parse_catalog_from_assets(assets, args.repo, args.tag)
+
+    all_zip_url = next(
+        (a["browser_download_url"] for a in assets if a.get("name") == "all-databases-parquet.zip"),
+        f"https://github.com/{args.repo}/releases/download/{args.tag}/all-databases-parquet.zip",
+    )
 
     if args.list:
-        list_catalog(manifest, args.repo, args.tag)
+        print(f"\n=== Parquet Data Catalog ({args.repo} @ {args.tag}) ===")
+        if not catalog:
+            print("No database tables found in release assets.")
+            return 0
+        for db, info in sorted(catalog.items()):
+            tables = info["tables"]
+            print(f"\nDatabase: {db} ({len(tables)} tables)")
+            if info["zip_url"]:
+                print(f"  Whole DB bundle: {info['zip_url']}")
+            print(f"  {'Table':<25} {'Size':>10}  {'Direct URL'}")
+            print("  " + "-" * 75)
+            for t_name, t_info in sorted(tables.items()):
+                size_kb = (t_info["size"] / 1024)
+                print(f"  {t_name:<25} {size_kb:>8.1f}KB  {t_info['url']}")
+        print(f"\nAll-in-one archive: {all_zip_url}\n")
         return 0
 
     if args.url:
         if args.all:
-            print(get_all_zip_url(args.repo, args.tag))
+            print(all_zip_url)
         elif args.db and args.table:
-            print(get_table_url(args.repo, args.tag, args.db, args.table))
+            url = catalog.get(args.db, {}).get("tables", {}).get(args.table, {}).get("url")
+            if not url:
+                url = f"https://github.com/{args.repo}/releases/download/{args.tag}/{args.db}.{args.table}.parquet"
+            print(url)
         elif args.db:
-            print(get_db_zip_url(args.repo, args.tag, args.db))
+            url = catalog.get(args.db, {}).get("zip_url")
+            if not url:
+                url = f"https://github.com/{args.repo}/releases/download/{args.tag}/{args.db}.zip"
+            print(url)
         else:
             print("Specify --all, or --db, or --db and --table with --url", file=sys.stderr)
             return 1
@@ -170,18 +190,19 @@ def main() -> int:
         except ImportError:
             print("error: duckdb is not installed. Install with 'pip install duckdb'", file=sys.stderr)
             return 1
-        url = get_table_url(args.repo, args.tag, args.db, args.table)
+        table_url = catalog.get(args.db, {}).get("tables", {}).get(args.table, {}).get("url")
+        if not table_url:
+            table_url = f"https://github.com/{args.repo}/releases/download/{args.tag}/{args.db}.{args.table}.parquet"
         print(f"Querying {args.db}.{args.table} directly via DuckDB:\n")
         con = duckdb.connect()
-        df = con.read_parquet(url)  # noqa: F841
+        df = con.read_parquet(table_url)  # noqa: F841
         res = con.sql(args.sql)
         res.show()
         return 0
 
     if args.all:
-        zip_url = get_all_zip_url(args.repo, args.tag)
         zip_dest = args.out_dir / "all-databases-parquet.zip"
-        if download_file(zip_url, zip_dest):
+        if download_file(all_zip_url, zip_dest):
             print(f"Extracting to {args.out_dir}...")
             with zipfile.ZipFile(zip_dest, "r") as zf:
                 zf.extractall(args.out_dir)
@@ -191,7 +212,9 @@ def main() -> int:
         return 1
 
     if args.db and args.table:
-        table_url = get_table_url(args.repo, args.tag, args.db, args.table)
+        table_url = catalog.get(args.db, {}).get("tables", {}).get(args.table, {}).get("url")
+        if not table_url:
+            table_url = f"https://github.com/{args.repo}/releases/download/{args.tag}/{args.db}.{args.table}.parquet"
         dest = args.out_dir / args.db / f"{args.table}.parquet"
         success = download_file(table_url, dest)
         if success:
@@ -200,7 +223,9 @@ def main() -> int:
         return 1
 
     if args.db:
-        db_zip_url = get_db_zip_url(args.repo, args.tag, args.db)
+        db_zip_url = catalog.get(args.db, {}).get("zip_url")
+        if not db_zip_url:
+            db_zip_url = f"https://github.com/{args.repo}/releases/download/{args.tag}/{args.db}.zip"
         zip_dest = args.out_dir / f"{args.db}.zip"
         if download_file(db_zip_url, zip_dest):
             print(f"Extracting {args.db} tables to {args.out_dir / args.db}...")

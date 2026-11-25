@@ -93,11 +93,8 @@ def package_assets(
                 zf.write(p, arcname=extra)
     print(f"Created all-in-one bundle: {all_zip_path.name} ({human_size(all_zip_path.stat().st_size)})")
 
-    # 4. Copy catalogs and manifest
-    for extra in ["catalog.duckdb", "catalog.sql", "manifest.json", "manifest.csv", "summary.md"]:
-        p = parquet_dir / extra
-        if p.exists():
-            shutil.copy2(p, out_dir / extra)
+    # 4. Keep internal catalog/manifest inside the zip bundle only, not as loose bloated assets
+    # Loose assets are strictly clean: table parquets, per-DB zip, and all-databases zip
 
     # 5. Generate DATA_CATALOG.md with direct download links and examples
     catalog_lines = [
